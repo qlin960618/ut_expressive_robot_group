@@ -15,23 +15,41 @@ logger.setLevel(logging.INFO)
 
 
 def draw_landmarks_on_image(rgb_image, detection_result):
-    pose_landmarks_list = detection_result.pose_landmarks
+    face_landmarks_list = detection_result.face_landmarks
     annotated_image = np.copy(rgb_image)
 
-    # Loop through the detected poses to visualize.
-    for idx in range(len(pose_landmarks_list)):
-        pose_landmarks = pose_landmarks_list[idx]
+    # Loop through the detected faces to visualize.
+    for idx in range(len(face_landmarks_list)):
+        face_landmarks = face_landmarks_list[idx]
 
-        # Draw the pose landmarks.
-        pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        pose_landmarks_proto.landmark.extend([
-            landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks
+        # Draw the face landmarks.
+        face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+        face_landmarks_proto.landmark.extend([
+            landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in face_landmarks
         ])
+
         solutions.drawing_utils.draw_landmarks(
-            annotated_image,
-            pose_landmarks_proto,
-            solutions.pose.POSE_CONNECTIONS,
-            solutions.drawing_styles.get_default_pose_landmarks_style())
+            image=annotated_image,
+            landmark_list=face_landmarks_proto,
+            connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=mp.solutions.drawing_styles
+            .get_default_face_mesh_tesselation_style())
+        solutions.drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks_proto,
+            connections=mp.solutions.face_mesh.FACEMESH_CONTOURS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=mp.solutions.drawing_styles
+            .get_default_face_mesh_contours_style())
+        solutions.drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks_proto,
+            connections=mp.solutions.face_mesh.FACEMESH_IRISES,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=mp.solutions.drawing_styles
+            .get_default_face_mesh_iris_connections_style())
+
     return annotated_image
 
 
@@ -39,12 +57,15 @@ def capture(dev):
     logger.info("loading media pipe pose landmarker")
 
     base_options = mp_python.BaseOptions(
-        model_asset_path='tmp/pose_landmarker.task',
+        model_asset_path='tmp/face_landmarker_v2_with_blendshapes.task',
     )
-    options = mp_vision.PoseLandmarkerOptions(
+    options = mp_vision.FaceLandmarkerOptions(
         base_options=base_options,
-        output_segmentation_masks=True)
-    detector = mp_vision.PoseLandmarker.create_from_options(options)
+        output_face_blendshapes=True,
+        output_facial_transformation_matrixes=True,
+        num_faces=2
+    )
+    detector = mp_vision.FaceLandmarker.create_from_options(options)
 
     cap = cv2.VideoCapture(dev)
 
@@ -61,7 +82,9 @@ def capture(dev):
         if not ret:
             logger.error(f"Failed to read from device {dev}")
             return None
+
         frame_np = np.array(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
         image = mp.Image(
             image_format=mp.ImageFormat.SRGB, data=frame_np,
             # channels=3, width=im_width, height=im_height
