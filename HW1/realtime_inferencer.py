@@ -47,27 +47,21 @@ class Inferencer:
         while ret:
             ret, frame = self.cap.read()
             if not ret:
-                logger.error(f"Failed to read from device {dev}")
+                logger.error(f"Failed to read from device {self.dev}")
                 return None
             if frame is not None:
                 if self.show_original:
                     cv2.imshow(f"original", frame)
-                frame = np.array(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-                # STEP 3: Load the input image.
-                # image = mp.ImageFrame(image_format=mp.ImageFormat.SRGB, data=frame)
-                image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+                detection_result = self.detector.detect(frame)
 
-                # STEP 4: Detect pose landmarks from the input image.
-                detection_result = self.detector.detect(image)
+                annotated_image = self.draw_function(frame, detection_result)
 
-                # STEP 5: Process the detection result. In this case, visualize it.
-                annotated_image = self.draw_function(image.numpy_view(), detection_result)
+                if annotated_image is not None:
+                    cv2.imshow(f"labeled", annotated_image)
 
-                cv2.imshow(f"labeled", cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-
-                if self.recorder is not None:
-                    self.recorder.write(cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
+                if self.recorder is not None and annotated_image is not None:
+                    self.recorder.write(annotated_image)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break

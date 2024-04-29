@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def draw_landmarks_on_image(rgb_image, detection_result):
+def draw_landmarks_on_image(frame, detection_result):
+    rgb_image = np.array(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
     pose_landmarks_list = detection_result.pose_landmarks
     annotated_image = np.copy(rgb_image)
 
@@ -37,10 +39,27 @@ def draw_landmarks_on_image(rgb_image, detection_result):
             pose_landmarks_proto,
             solutions.pose.POSE_CONNECTIONS,
             solutions.drawing_styles.get_default_pose_landmarks_style())
-    return annotated_image
+
+    return cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
 
 
-device = 1
+class DetectorMediaPipe:
+    def __init__(self, model):
+        self.model = model
+
+    def detect(self, frame):
+        frame = np.array(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        # STEP 3: Load the input image.
+        # image = mp.ImageFrame(image_format=mp.ImageFormat.SRGB, data=frame)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+
+        results = self.model.detect(image)
+
+        return results
+
+
+device = 0
 
 if __name__ == "__main__":
     logger.info("loading mediapipe")
@@ -55,7 +74,7 @@ if __name__ == "__main__":
     detector = mp_vision.PoseLandmarker.create_from_options(options)
     logger.info("mediapipe loaded")
 
-    inferencer = Inferencer(device, detector, draw_landmarks_on_image,
+    inferencer = Inferencer(device, DetectorMediaPipe(detector), draw_landmarks_on_image,
                             show_original=False, show_fps=True,
                             record_path="tmp/pose_landmarker_test.mp4")
     try:
