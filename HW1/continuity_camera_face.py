@@ -81,7 +81,7 @@ class DetectorMediaPipe:
         return results
 
 
-device = 0
+device = 1
 
 if __name__ == "__main__":
     logger.info("loading mediapipe")
@@ -92,7 +92,7 @@ if __name__ == "__main__":
         base_options=base_options,
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
-        num_faces=1
+        num_faces=2
     )
     detector = mp_vision.FaceLandmarker.create_from_options(options)
     logger.info("mediapipe loaded")

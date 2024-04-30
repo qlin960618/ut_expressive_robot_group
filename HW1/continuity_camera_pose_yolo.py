@@ -30,7 +30,7 @@ class DetectorDummy:
         return results
 
 
-device = 0
+device = 1
 
 if __name__ == "__main__":
     logger.info("loading YOLO model")
@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     inferencer = Inferencer(device, DetectorDummy(model=yolo_model), draw_landmarks_on_image,
                             show_original=True, show_fps=True,
-                            record_path="tmp/pose_landmarker_yolo_test.mp4")
+                            record_path="tmp/pose_landmarker_yolo_test2.mp4")
     try:
         logger.info("starting loop")
         inferencer.start_loop()

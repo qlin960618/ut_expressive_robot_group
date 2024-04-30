@@ -59,7 +59,7 @@ class DetectorMediaPipe:
         return results
 
 
-device = 0
+device = 1
 
 if __name__ == "__main__":
     logger.info("loading mediapipe")
