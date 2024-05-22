@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
     # Load a model
     yolo_model = YOLO('tmp/yolov8n-pose.pt')  # load an official model
-
+    yolo_model.to("mps")
     logger.info("yolo loaded")
 
     inferencer = Inferencer(device, DetectorDummy(model=yolo_model), draw_landmarks_on_image,
