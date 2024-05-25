@@ -166,7 +166,7 @@ def convert_magnitude(data_):
         if key == "Time":
             continue
         value = data_[key]
-        data_[key] = np.linalg.norm(value, axis=1)
+        data_[key] = np.linalg.norm(value, axis=1).reshape(1, -1).T
     return data_
 
 y_value_lookup = {
