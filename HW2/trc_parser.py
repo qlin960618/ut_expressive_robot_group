@@ -6,6 +6,7 @@ from queue import Queue
 import pickle
 import random
 
+
 def read_trc(file_path):
     pass
 
@@ -87,7 +88,7 @@ def read_file(path):
     single_frame_index = 2
     # remove participant tag
     for i in range(meta_data["NumMarkers"]):
-        data_header[i+single_frame_index] = data_header[i+single_frame_index].split("_")[1]
+        data_header[i + single_frame_index] = data_header[i + single_frame_index].split("_")[1]
 
     data_raw = []
 
@@ -158,6 +159,28 @@ def append_second_order(data_, rate):  # acceleration
     return data_
 
 
+def append_thrid_order(data_, rate):  # jerk
+    delta_t = 1.0 / rate
+    keys = list(data_.keys())
+    for key in keys:
+        if key == "Frame#":
+            continue
+        if key == "Time":
+            continue
+        if key.find("_2order") != -1:
+            continue
+        value = data_[key]
+        diff = np.diff(value, axis=0)
+        diff = np.concatenate([value[0].reshape(1, -1), diff], axis=0) / delta_t
+        diff = np.diff(diff, axis=0)
+        diff = np.concatenate([value[0].reshape(1, -1), diff], axis=0) / delta_t
+        diff = np.diff(diff, axis=0)
+        diff = np.concatenate([value[0].reshape(1, -1), diff], axis=0) / delta_t
+        data_[key + "_3order"] = diff
+
+    return data_
+
+
 def convert_magnitude(data_):
     keys = list(data_.keys())
     for key in keys:
@@ -168,6 +191,7 @@ def convert_magnitude(data_):
         value = data_[key]
         data_[key] = np.linalg.norm(value, axis=1).reshape(1, -1).T
     return data_
+
 
 y_value_lookup = {
     "COE": 0,
@@ -182,7 +206,6 @@ NEE = neutral
 JOE = happy
 """
 
-
 save_dir = "./data"
 
 root_dir = "/Users/quentinlin/Nextcloud/TokyoUniversity/Doctorate/2024 S12/Expressive_robot_control/mocap_data/Emotions_Walk_College_de_France/MotionCaptureData trc"
@@ -194,7 +217,8 @@ if __name__ == "__main__":
         data, metadata = read_file(file_info["full_path"])
         data = zero_offset(data)
         data = append_first_order(data, rate=metadata["DataRate"])
-        data = append_second_order(data, rate=metadata["DataRate"])
+        # data = append_second_order(data, rate=metadata["DataRate"])
+        # data = append_thrid_order(data, rate=metadata["DataRate"])
         # convert to magnitude only
         # data = convert_magnitude(data)
         metadata.update(file_info)
@@ -217,4 +241,3 @@ if __name__ == "__main__":
         pickle.dump(train_datas, f)
     with open(os.path.join(save_dir, "test_data.pkl"), "wb") as f:
         pickle.dump(test_datas, f)
-

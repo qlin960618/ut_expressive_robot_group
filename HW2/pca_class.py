@@ -43,6 +43,17 @@ def make_single_matrix(dataset):
     return y, X
 
 
+def make_x(data):
+    X_entry = None
+    tag_key = list(data["data"].keys())[2:]
+    for tag in tag_key:
+        if X_entry is None:
+            X_entry = data["data"][tag]
+        else:
+            X_entry = np.hstack([X_entry, data["data"][tag]])
+
+    return X_entry
+
 def transform_individual(data, pca):
     X_entry = None
     tag_key = list(data["data"].keys())[2:]
@@ -69,7 +80,7 @@ if __name__ == "__main__":
 
     y, X = make_single_matrix(data)
 
-    pca = PCA(10, X.shape[1])
+    pca = PCA(20, X.shape[1])
     pca.fit(X)
     X_pca = pca.transform(X)
     print(X_pca.shape)
@@ -85,8 +96,9 @@ if __name__ == "__main__":
 
         data_reduced = {}
         for key, data_ in data.items():
-            X_entry = transform_individual(data_, pca)
-            data_reduced[key] = {"X_pca": X_entry}
+            X_pca = transform_individual(data_, pca)
+            X = make_x(data_)
+            data_reduced[key] = {"X_pca": X_pca, "X": X}
             data_reduced[key].update(data_)
             # print(X_entry.shape)
 
