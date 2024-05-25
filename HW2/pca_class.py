@@ -1,4 +1,3 @@
-import learn
 import numpy as np
 import os
 import pickle
@@ -70,7 +69,7 @@ if __name__ == "__main__":
 
     y, X = make_single_matrix(data)
 
-    pca = PCA(3, X.shape[1])
+    pca = PCA(10, X.shape[1])
     pca.fit(X)
     X_pca = pca.transform(X)
     print(X_pca.shape)
