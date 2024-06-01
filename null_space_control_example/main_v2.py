@@ -41,19 +41,26 @@ CONFIG = {
     "control_gain": 10.0,
     "effector_t": [0, 0, 0.1],
     "effector_r": [1, 0, 0, 0],
-
-    "enable_exploration": True,
-    # "null_sapce_geometry": "line",
-    # "null_sapce_geometry": "line_angle",
-    "null_space_entity": "VFI_static_sphere",
-    "null_sapce_geometry": "joint",
-    # "null_space_entity": None,
-    "null_space_range": [-10, 10],
-
     "null_space_gain": 10.0,
 
-}
+    "enable_exploration": True,
 
+
+    #------------------- Select one only -------------------
+    # line to line angle
+    "null_sapce_geometry": "line_angle",
+    "null_space_entity_target": "VFI_static_sphere",
+    "null_space_entity_source": "panda_null_source_line",
+    "null_space_entity_joint": 4,
+    "null_space_range": [-3, 3],
+    #--------------------------------------
+    # joint
+    # "null_sapce_geometry": "joint",
+    # "null_space_entity_target" : None,
+    # "null_space_range": [-10, 10],
+
+
+}
 
 
 class KeepingType(Enum):
@@ -76,6 +83,7 @@ def apply_secondary_maintaince_equality(ua_primary, Jx, Jr, Jt, keeping_types):
         W_eq_keeping = np.vstack([W_eq_keeping, Jx])
         w_eq_keeping = np.hstack([w_eq_keeping, Jx @ ua_primary])
     return W_eq_keeping, w_eq_keeping
+
 
 def pose_to_entty_dq(pose, geometry):
     if geometry in ["line", "line_angle"]:
@@ -100,21 +108,52 @@ def get_null_space_dimensions(geometry):
     return nullspace_dimensions
 
 
-def get_null_space_jacobian(Jx, robot_x, geometry, null_ref_x=None):
-    if geometry == "line":
-        line_l = dql.Ad(dql.rotation(robot_x), dql.k_)
-        line_l_dq = line_l + dql.E_ * (dql.cross(dql.translation(robot_x), line_l))
-        return DQ_Kinematics.line_jacobian(Jx, robot_x, dql.k_)
-    elif geometry == "line_angle":
-        line_l = dql.Ad(dql.rotation(robot_x), dql.k_)
-        line_l_dq = line_l + dql.E_ * (dql.cross(dql.translation(robot_x), line_l))
-        robot_Jline = DQ_Kinematics.line_jacobian(Jx, robot_x, dql.k_)
-        return DQ_Kinematics.line_to_line_angle_jacobian(robot_Jline, line_l_dq, null_ref_x)
+def get_null_space_jacobian_runtime(robot: DQ_Kinematics, q: np.ndarray, null_space_parameter: dict, null_target_x=None):
+    dim_extension = robot.get_dim_configuration_space()-null_space_parameter["to_joint"]-1
+    if null_space_parameter["geometry"] == "line":
+        robot_x = robot.fkm(q, null_space_parameter["to_joint"])
+        Jx = robot.pose_jacobian(q, null_space_parameter["to_joint"])
+        Jx = np.hstack([Jx, np.zeros([8, dim_extension])])
+        J_X_n = dql.haminus8(null_space_parameter["tf"]) @ Jx
+        x_null = robot_x * null_space_parameter["tf"]
+        line_l = dql.Ad(dql.rotation(x_null), dql.k_)
+        line_l_dq = line_l + dql.E_ * (dql.cross(dql.translation(x_null), line_l))
+        return DQ_Kinematics.line_jacobian(J_X_n, line_l_dq, dql.k_)
+    elif null_space_parameter["geometry"] == "line_angle":
+        robot_x = robot.fkm(q, null_space_parameter["to_joint"])
+        Jx = robot.pose_jacobian(q, null_space_parameter["to_joint"])
+        Jx = np.hstack([Jx, np.zeros([8, dim_extension])])
+        J_X_n = dql.haminus8(null_space_parameter["tf"]) @ Jx
+        x_null = robot_x * null_space_parameter["tf"]
+        line_l = dql.Ad(dql.rotation(x_null), dql.k_)
+        line_l_dq = line_l + dql.E_ * (dql.cross(dql.translation(x_null), line_l))
+        target_l = dql.Ad(dql.rotation(null_target_x), dql.k_)
+        target_l_dq = target_l + dql.E_ * (dql.cross(dql.translation(null_target_x), target_l))
+        robot_Jline = DQ_Kinematics.line_jacobian(J_X_n, line_l_dq, dql.k_)
+        return DQ_Kinematics.line_to_line_angle_jacobian(robot_Jline, line_l_dq, target_l_dq)
 
-    elif geometry == "joint":
-        return np.eye(Jx.shape[1])
+    elif null_space_parameter["geometry"] == "joint":
+        return np.eye(robot.get_dim_configuration_space())
     else:
         raise ValueError("null space geometry not supported")
+
+
+def get_null_sapce_entity_init(vrep_interface, robot, null_space_entity_name, null_space_entity_joint, geometry):
+    if geometry == "joint":
+        return {
+            "geometry": geometry,
+            "to_joint": robot.get_dim_configuration_space() - 1
+        }
+    entity_x = vrep_interface.get_object_pose(null_space_entity_name)
+    joint_x = robot.fkm(robot.get_joint_positions(), null_space_entity_joint)
+    tf = dql.conj(joint_x) * entity_x
+    null_space_parameter = {
+        "geometry": geometry,
+        "tf": tf,
+        "to_joint": null_space_entity_joint
+    }
+
+    return null_space_parameter
 
 
 def invariant_pose_error(x, xd):
@@ -179,6 +218,11 @@ def main(config):
     # joint_initial = np.array([0, 0, 0, -np.pi / 2.0, 0, np.pi / 2.0, 0])
     joint_initial = robot.get_joint_positions()
 
+    # get runtime information for null space target parameter
+    null_space_parameter = get_null_sapce_entity_init(vrep_interface, robot,
+                                                      config.get("null_space_entity_target", None),
+                                                      config.get("null_space_entity_joint", None),
+                                                      config["null_sapce_geometry"])
     def update_robot(q):
         robot.send_joint_positions(q)
         robot_x = robot.fkm(q)
@@ -249,21 +293,16 @@ def main(config):
                         H_old = H
                         f_old = f
 
-                        if config["null_space_entity"] is not None:
-                            null_ref_x = vrep_interface.get_object_pose(config["null_space_entity"])
-                            null_ref_x = pose_to_entty_dq(null_ref_x, config["null_sapce_geometry"])
+                        #########################################
+                        if "null_space_entity_target" in config and config["null_space_entity_target"] is not None:
+                            null_ref_x = vrep_interface.get_object_pose(config["null_space_entity_target"])
                         else:
                             null_ref_x = None
-                        #
-                        # to_joint = 5
-                        # Jx = robot.pose_jacobian(robot_q, to_joint)
-                        # if dims - 1 > to_joint:
-                        #     Jx = np.hstack([Jx, np.zeros([Jx.shape[0], dims - 1 - to_joint])])
 
-                        J_null = get_null_space_jacobian(Jx, robot_x, config["null_sapce_geometry"], null_ref_x)
+                        J_null = get_null_space_jacobian_runtime(robot, robot_q, null_space_parameter, null_ref_x)
                         # print(J_null)
                         # print(J_null.shape)
-                        Px = (np.eye(dims) - np.linalg.pinv(Jx) @ Jx) @ J_null  # Nullspace projection matrix
+                        Px = (np.eye(dims) - np.linalg.pinv(Jx) @ Jx) @ J_null.T  # Nullspace projection matrix
 
                         # print(Px)
                         # Pt = np.eye(dims) - np.linalg.pinv(Jt) @ Jt
@@ -271,9 +310,9 @@ def main(config):
 
                         # print("Px", Px.shape, "J_null", J_null.shape, "u_null", u_null.shape)
                         gain_sec = config["null_space_gain"]
-                        f = f_old + gain_sec * u_null.T @ Px
-                        H = H_old + gain_sec * Px.T @ Px
-                        # f = f + u_null.T @ J_null
+
+                        f = f_old + gain_sec * u_null @ Px.T
+                        H = H_old + gain_sec * Px @ Px.T
 
                         # f = 2 * (alpha * (err_t1.T + Px @ J_null.T @ u_null) @ Jt + (1.0 - alpha) * err_r1.T @ Nr) * gain
 
@@ -314,7 +353,6 @@ def main(config):
     # vrep_interface.stop_simulation()
     vrep_interface.disconnect_all()
     logger.info("simulation stopped and disconnected")
-
 
 
 if __name__ == "__main__":
