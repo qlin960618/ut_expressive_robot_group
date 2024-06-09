@@ -44,14 +44,16 @@ CONFIG = {
 
     "x_name": "x1",
     "xd_name": "xd1",
+    "gaze_target_name": "gaze_target",
 
     "control_tau": 0.01,
     "control_alpha": 0.99,
     "control_objb": 0.0001,
-    "control_gain": 1.0,
+    "control_gain": 5.0,
     "effector_t": [0, 0, 0.1],
     "effector_r": [1, 0, 0, 0],
     "null_space_gain": 1.0,
+    "null_rotation_gain": 6.0,
 
     "ui_slider_range": [-1, 1],
     "ui_num_slider": 3,
@@ -126,6 +128,44 @@ def get_variable_boundaries_inequality(q, q_plus, q_minus):
     return W, w
 
 
+def get_gaze_rotation(robot_x, target_t):
+    # calculate gaze rotation align z axis with robot t to target_t
+    robot_t = dql.translation(robot_x)
+    robot_r = dql.rotation(robot_x)
+    gaze_vec = (target_t - robot_t).normalize().vec3()
+    z_vec = dql.Ad(robot_r, dql.k_).vec3()
+    rot_axis = np.cross(z_vec, gaze_vec)
+    angle = np.arccos(np.dot(z_vec, gaze_vec) / (np.linalg.norm(z_vec) * np.linalg.norm(gaze_vec)))
+    return (np.cos(angle / 2) + np.sin(angle / 2) * dql.DQ(rot_axis).normalize()) * robot_r
+
+
+def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits) -> np.ndarray:  # dim: 1,7
+    q_lower, q_upper = joint_limits
+    """
+    ω is the oscillation pulsation between the
+    configurations ceta_v0_i+hi = q_upper and ceta_v0_i−hi = q_lower
+     ceta_0i = robot_q
+    """
+    hi = (q_upper - q_lower) / 2 * 0.5
+    ceta_v0_i = (q_upper + q_lower) / 2
+    ceta_0i = robot_q
+
+    # P: Pleasure
+    # A: Arousal
+    # D: Dominance
+    J = (1 - pad_val[0]) / 2
+    V = (1 + pad_val[1]) / 2
+    G = (1 + pad_val[2]) / 2
+    # ceta_v0_i = np.array([0, 0, 0, 0, 0, 0, 0])
+    # ceta_0i = np.array([3, 3, 0, 3, 3, 3, 3])
+    # hi = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+    w = np.pi * np.array([1, 2, 3, 1, 2, 1, 2])
+
+    ceta_target = (1 - V) * ceta_0i + V * (ceta_v0_i + hi * np.sin(w * t))
+
+    return ceta_target - robot_q
+
+
 def main(config):
     robot = Robot_VrepInterface(JSON_PATH, config["robot_name"])
 
@@ -145,7 +185,8 @@ def main(config):
 
     logger.info("Setting up UI")
     ui = ControlWindowLauncher(config["ui_num_slider"], [tuple(config['ui_slider_range'])] * config["ui_num_slider"],
-                               self_centering=None)
+                               self_centering=None,
+                               slider_labels=["slider P", "slider A", "slider D"])
 
     robot_q_plus = robot.get_upper_q_limit()
     robot_q_minus = robot.get_lower_q_limit()
@@ -156,7 +197,7 @@ def main(config):
     traj = TrajTranslationEllipse(
         duration=10,  # duration of the trajectory
         sampling_time=config["control_tau"],  # sampling time of the trajectory
-        center=dql.DQ([0, 0, 0.8]),  # center of the ellipse
+        center=dql.DQ([0, 0, 0.7]),  # center of the ellipse
         normal=dql.DQ([0, 0, 1]),  # normal of the ellipse
         radius_a=0.1,  # radius along the major axis
         radius_b=0.3,  # radius along the minor axis
@@ -190,9 +231,19 @@ def main(config):
             interation += 1
             # xd = robot.get_xd_pose()
             robot_x = robot.fkm(robot_q)
-            td, _ = traj.get_setpoint(interation * config["control_tau"])
-            rd = vrep_interface.get_object_rotation(config["xd_name"])
-            xd = rd + 0.5 * dql.E_ * td * rd
+            td, td_dot = traj.get_setpoint(interation * config["control_tau"])
+
+            target_t = vrep_interface.get_object_translation(config["gaze_target_name"])
+            # calculate gaze rotation allinge z axis with robot t to target_t
+            """
+            def get_gaze_rotation(robot_x, target_t)\
+            """
+            rd_gaze = get_gaze_rotation(robot_x, target_t)
+
+            xd = rd_gaze + 0.5 * dql.E_ * td * rd_gaze
+
+            vrep_interface.set_object_translation(config["xd_name"], td)
+            vrep_interface.set_object_rotation(config["xd_name"], rd_gaze)
 
             Jx = robot.pose_jacobian(robot_q)
 
@@ -214,7 +265,7 @@ def main(config):
             J_rot = get_objective_jacobian(Jx, robot_x, xd, ControlObjective.ROTATION)
 
             err_vec = get_objective_error_vec(robot_x, xd, config['control_objective'])
-            err_rot_vec = get_objective_error_vec(robot_x, xd, ControlObjective.ROTATION)
+            err_rot_vec = get_objective_error_vec(robot_x, rd_gaze, ControlObjective.ROTATION)
 
             pad_val = np.array(ui.get_values())  # get nullspace values from UI
             # pad_val = np.array(ui.get_values())  # get nullspace values from UI
@@ -226,12 +277,14 @@ def main(config):
             #     # θmi t = 1−V θ0i + V[θV0i + hisin(ωt + φi)]
             #     pass
             #
-            u_null = np.zeros([7])
+            u_null = PAD_to_JV_conversion(pad_val, interation * config["control_tau"],
+                                          robot_q, [robot_q_minus, robot_q_plus])
+            print(u_null)
 
             try:
-                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec)
-                       + config["null_space_gain"] * (np.eye(dims) - pinv(J_obj) @ J_obj) @ u_null
-                       + config["null_space_gain"] * (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot @
+                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec + td_dot.vec4())
+                       +(np.eye(dims) - pinv(J_obj) @ J_obj) @ (config["null_space_gain"] *u_null)
+                       + (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot.T @ (config["null_rotation_gain"] * err_rot_vec)
                        )
                 robot_q = robot_q + ua_ * config["control_tau"]
             except Exception as e:
