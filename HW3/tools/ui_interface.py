@@ -15,7 +15,7 @@ FLOATING_POINT_PRECISION = 4
 
 
 class ControlWindowLauncher:
-    def __init__(self, num_values, vals_range, self_centering=None):
+    def __init__(self, num_values, vals_range, self_centering=None, slider_labels=None):
         self.e_exit = mp.Event()
         self.manager = SharedMemoryManager()
         self.manager.start()
@@ -25,6 +25,7 @@ class ControlWindowLauncher:
             "num_values": num_values,
             "vals_range": vals_range,
             "self_centering": self_centering,
+            "slider_labels": slider_labels
         }
 
         assert len(vals_range) == num_values, "range and num_values mismatch"
@@ -33,13 +34,16 @@ class ControlWindowLauncher:
         if self_centering is not None:
             for val_range in vals_range:
                 assert val_range[0] <= self_centering <= val_range[1], "unexpected self_centering value"
+        if slider_labels is not None:
+            assert len(slider_labels) == num_values, "slider_labels and num_values mismatch"
         self.shared_list = self.manager.ShareableList([0] * num_values)
-
         self.windows_process = _ControlWindowProcess(self.e_exit, self.shared_list, ui_config)
         self.windows_process.start()
 
     def close(self):
         self.e_exit.set()
+        self.windows_process.join()
+
 
     def get_values(self):
         vals = [0] * self.num_values
@@ -80,6 +84,7 @@ class _ControlWindow(QtWidgets.QWidget):
         val_len = ui_config["num_values"]
         val_range = ui_config['vals_range']
         self_centering = ui_config['self_centering']
+        slider_labels = ui_config['slider_labels']
         self.self_centering = self_centering
 
         self.setWindowTitle("value control")
@@ -94,6 +99,9 @@ class _ControlWindow(QtWidgets.QWidget):
             layout.addLayout(slider_layout)
 
         for i in range(val_len):
+            if slider_labels is not None:
+                txt_label = QLabel(slider_labels[i])
+                slider_layouts[i].addWidget(txt_label)
             label = QLabel(f'{0:10.{FLOATING_POINT_PRECISION}f}')
             slider_layouts[i].addWidget(label)
             slider = QSlider(Qt.Horizontal)
@@ -129,7 +137,8 @@ class _ControlWindow(QtWidgets.QWidget):
 if __name__ == "__main__":
     import time
 
-    launcher = ControlWindowLauncher(3, [(0, 100), (0, 10), (0, 10)])
+    launcher = ControlWindowLauncher(3, [(0, 100), (0, 10), (0, 10)],
+                                     slider_labels=["slider1", "slider2", "slider3"])
     try:
         while launcher.is_alive():
             time.sleep(0.1)
