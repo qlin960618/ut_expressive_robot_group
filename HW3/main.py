@@ -53,7 +53,7 @@ CONFIG = {
     "effector_t": [0, 0, 0.1],
     "effector_r": [1, 0, 0, 0],
     "null_space_gain": 1.0,
-    "null_rotation_gain": 6.0,
+    "null_rotation_gain": 10.0,
 
     "ui_slider_range": [-1, 1],
     "ui_num_slider": 3,
@@ -139,7 +139,7 @@ def get_gaze_rotation(robot_x, target_t):
     return (np.cos(angle / 2) + np.sin(angle / 2) * dql.DQ(rot_axis).normalize()) * robot_r
 
 
-def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits) -> np.ndarray:  # dim: 1,7
+def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits, rd):  # dim: 1,7
     q_lower, q_upper = joint_limits
     """
     ω is the oscillation pulsation between the
@@ -156,14 +156,29 @@ def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits) -> np.ndarray:  # di
     J = (1 - pad_val[0]) / 2
     V = (1 + pad_val[1]) / 2
     G = (1 + pad_val[2]) / 2
-    # ceta_v0_i = np.array([0, 0, 0, 0, 0, 0, 0])
-    # ceta_0i = np.array([3, 3, 0, 3, 3, 3, 3])
-    # hi = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+
     w = np.pi * np.array([1, 2, 3, 1, 2, 1, 2])
+    wjs = [np.pi * np.array([1, 2, 3, 1, 2, 1, 2]), np.pi * np.array([1, 2, 3, 1, 2, 1, 2]) * 2]
+    aj = [3, 2]
+    bj = [6, 5]
 
-    ceta_target = (1 - V) * ceta_0i + V * (ceta_v0_i + hi * np.sin(w * t))
+    w_gaze = 2 * np.pi / 5.0
+    a_gaze = np.radians(60)
+    gaze_ang = (1 - G) * a_gaze * np.sin(w_gaze * t)
+    r_gaze = np.cos(gaze_ang / 2) + dql.j_ * np.sin(gaze_ang / 2)
 
-    return ceta_target - robot_q
+    """
+     phi = 
+    j=1
+    nJ[ajsin ωjt +bjcos(ωjt)]
+    """
+    # P
+    phi = J * np.sum([(aj[j_] * np.sin(wj * t) + bj[j_] * np.cos(wj * t)) for j_, wj in enumerate(wjs)])
+
+    # V
+    ceta_target = (1 - V) * ceta_0i + V * (ceta_v0_i + hi * np.sin(w * t + phi))
+
+    return ceta_target - robot_q, r_gaze * rd
 
 
 def main(config):
@@ -243,7 +258,6 @@ def main(config):
             xd = rd_gaze + 0.5 * dql.E_ * td * rd_gaze
 
             vrep_interface.set_object_translation(config["xd_name"], td)
-            vrep_interface.set_object_rotation(config["xd_name"], rd_gaze)
 
             Jx = robot.pose_jacobian(robot_q)
 
@@ -262,10 +276,8 @@ def main(config):
             # Objective
             #########################################
             J_obj = get_objective_jacobian(Jx, robot_x, xd, config['control_objective'])
-            J_rot = get_objective_jacobian(Jx, robot_x, xd, ControlObjective.ROTATION)
 
             err_vec = get_objective_error_vec(robot_x, xd, config['control_objective'])
-            err_rot_vec = get_objective_error_vec(robot_x, rd_gaze, ControlObjective.ROTATION)
 
             pad_val = np.array(ui.get_values())  # get nullspace values from UI
             # pad_val = np.array(ui.get_values())  # get nullspace values from UI
@@ -277,13 +289,20 @@ def main(config):
             #     # θmi t = 1−V θ0i + V[θV0i + hisin(ωt + φi)]
             #     pass
             #
-            u_null = PAD_to_JV_conversion(pad_val, interation * config["control_tau"],
-                                          robot_q, [robot_q_minus, robot_q_plus])
+            u_null, rd_gaze = PAD_to_JV_conversion(pad_val, interation * config["control_tau"],
+                                                   robot_q, [robot_q_minus, robot_q_plus], rd_gaze)
+
+            J_rot = get_objective_jacobian(Jx, robot_x, rd_gaze, ControlObjective.ROTATION)
+            err_rot_vec = get_objective_error_vec(robot_x, rd_gaze, ControlObjective.ROTATION)
+            vrep_interface.set_object_rotation(config["xd_name"], rd_gaze)
+
             print(u_null)
 
             try:
-                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec + td_dot.vec4())
-                       +(np.eye(dims) - pinv(J_obj) @ J_obj) @ (config["null_space_gain"] *u_null)
+                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec)
+                       + (np.eye(dims) - pinv(J_obj) @ J_obj) @ (np.eye(dims) - pinv(J_rot) @ J_rot) @ (
+                                   config["null_space_gain"] * u_null)
+                       # +(np.eye(dims) - pinv(J_obj) @ J_obj) @ (config["null_space_gain"] *u_null)
                        + (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot.T @ (config["null_rotation_gain"] * err_rot_vec)
                        )
                 robot_q = robot_q + ua_ * config["control_tau"]
