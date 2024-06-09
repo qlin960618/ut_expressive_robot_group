@@ -53,10 +53,10 @@ CONFIG = {
     "effector_r": [1, 0, 0, 0],
     "null_space_gain": 1.0,
 
-    "ui_slider_range": [-3, 3],
-    "ui_num_slider": 7,
+    "ui_slider_range": [-1, 1],
+    "ui_num_slider": 3,
 
-    "control_objective": ControlObjective.ROTATION,
+    "control_objective": ControlObjective.TRANSLATION,
 
 }
 
@@ -145,7 +145,7 @@ def main(config):
 
     logger.info("Setting up UI")
     ui = ControlWindowLauncher(config["ui_num_slider"], [tuple(config['ui_slider_range'])] * config["ui_num_slider"],
-                               self_centering=0)
+                               self_centering=None)
 
     robot_q_plus = robot.get_upper_q_limit()
     robot_q_minus = robot.get_lower_q_limit()
@@ -156,10 +156,10 @@ def main(config):
     traj = TrajTranslationEllipse(
         duration=10,  # duration of the trajectory
         sampling_time=config["control_tau"],  # sampling time of the trajectory
-        center=dql.DQ([0, 0, 1]),  # center of the ellipse
+        center=dql.DQ([0, 0, 0.8]),  # center of the ellipse
         normal=dql.DQ([0, 0, 1]),  # normal of the ellipse
-        radius_a= 0.5,  # radius along the major axis
-        radius_b= 0.1,  # radius along the minor axis
+        radius_a=0.1,  # radius along the major axis
+        radius_b=0.3,  # radius along the minor axis
         start_vector=dql.DQ([0, 1, 0]),  # start vector of the trajectory
     )
 
@@ -184,9 +184,15 @@ def main(config):
         solver.set_equality_constraints_tolerance(dql.DQ_threshold)
         robot_q = robot.get_joint_positions()
 
+        interation = 0
+
         while ui.is_alive():
-            xd = robot.get_xd_pose()
+            interation += 1
+            # xd = robot.get_xd_pose()
             robot_x = robot.fkm(robot_q)
+            td, _ = traj.get_setpoint(interation * config["control_tau"])
+            rd = vrep_interface.get_object_rotation(config["xd_name"])
+            xd = rd + 0.5 * dql.E_ * td * rd
 
             Jx = robot.pose_jacobian(robot_q)
 
@@ -205,18 +211,34 @@ def main(config):
             # Objective
             #########################################
             J_obj = get_objective_jacobian(Jx, robot_x, xd, config['control_objective'])
+            J_rot = get_objective_jacobian(Jx, robot_x, xd, ControlObjective.ROTATION)
 
             err_vec = get_objective_error_vec(robot_x, xd, config['control_objective'])
+            err_rot_vec = get_objective_error_vec(robot_x, xd, ControlObjective.ROTATION)
 
-            u_null = np.array(ui.get_values())  # get nullspace values from UI
+            pad_val = np.array(ui.get_values())  # get nullspace values from UI
+            # pad_val = np.array(ui.get_values())  # get nullspace values from UI
+            #
+            # def PAD_to_JV_conversion(pad_val, t) -> np.ndarray: # dim: 1,7
+            #     # P: Pleasure
+            #     # A: Arousal
+            #     # D: Dominance
+            #     # θmi t = 1−V θ0i + V[θV0i + hisin(ωt + φi)]
+            #     pass
+            #
+            u_null = np.zeros([7])
 
             try:
                 ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec)
-                       + config["null_space_gain"] * (np.eye(dims) - pinv(J_obj) @ J_obj) @ u_null)
+                       + config["null_space_gain"] * (np.eye(dims) - pinv(J_obj) @ J_obj) @ u_null
+                       + config["null_space_gain"] * (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot @
+                       )
                 robot_q = robot_q + ua_ * config["control_tau"]
             except Exception as e:
                 print(e)
                 traceback.print_exc()
+
+            robot_q = np.clip(robot_q, robot_q_minus, robot_q_plus)
 
             update_robot(robot_q)
 
