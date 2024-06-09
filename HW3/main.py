@@ -210,7 +210,7 @@ def main(config):
     # setup trajectory
     #########################################
     traj = TrajTranslationEllipse(
-        duration=10,  # duration of the trajectory
+        duration=20,  # duration of the trajectory
         sampling_time=config["control_tau"],  # sampling time of the trajectory
         center=dql.DQ([0, 0, 0.7]),  # center of the ellipse
         normal=dql.DQ([0, 0, 1]),  # normal of the ellipse
@@ -299,7 +299,7 @@ def main(config):
             print(u_null)
 
             try:
-                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec)
+                ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec + td_dot.vec4())
                        + (np.eye(dims) - pinv(J_obj) @ J_obj) @ (np.eye(dims) - pinv(J_rot) @ J_rot) @ (
                                    config["null_space_gain"] * u_null)
                        # +(np.eye(dims) - pinv(J_obj) @ J_obj) @ (config["null_space_gain"] *u_null)
