@@ -47,8 +47,6 @@ CONFIG = {
     "gaze_target_name": "gaze_target",
 
     "control_tau": 0.01,
-    "control_alpha": 0.99,
-    "control_objb": 0.0001,
     "control_gain": 5.0,
     "effector_t": [0, 0, 0.1],
     "effector_r": [1, 0, 0, 0],
@@ -109,17 +107,6 @@ def get_objective_error_vec(x: dql.DQ, xd: dql.DQ, control_objective: ControlObj
         raise ValueError("Control objective not supported")
 
 
-def pose_to_entty_dq(pose, geometry):
-    if geometry in ["line", "line_angle"]:
-        line_l = dql.Ad(dql.rotation(pose), dql.k_)
-        line_l_dq = line_l + dql.E_ * (dql.cross(dql.translation(pose), line_l))
-        return line_l_dq
-    elif geometry == "joint":
-        return pose
-    else:
-        raise ValueError(f"null space geometry: {geometry} not supported")
-
-
 def get_variable_boundaries_inequality(q, q_plus, q_minus):
     n_dims = len(q)
     W = np.vstack([-np.eye(n_dims), np.eye(n_dims)])
@@ -139,16 +126,16 @@ def get_gaze_rotation(robot_x, target_t):
     return (np.cos(angle / 2) + np.sin(angle / 2) * dql.DQ(rot_axis).normalize()) * robot_r
 
 
-def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits, rd):  # dim: 1,7
+def PAD_to_JV_conversion(pad_val, robot_q, joint_limits, rd, t):  # dim: 1,7
     q_lower, q_upper = joint_limits
-    """
-    ω is the oscillation pulsation between the
-    configurations ceta_v0_i+hi = q_upper and ceta_v0_i−hi = q_lower
-     ceta_0i = robot_q
-    """
     hi = (q_upper - q_lower) / 2 * 0.5
     ceta_v0_i = (q_upper + q_lower) / 2
     ceta_0i = robot_q
+
+    w = np.pi * np.array([1, 2, 3, 1, 2, 1, 2])
+    wjs = [np.pi * np.array([1, 2, 3, 1, 2, 1, 2]), np.pi * np.array([1, 2, 3, 1, 2, 1, 2]) * 2]
+    aj = [3, 2]
+    bj = [6, 5]
 
     # P: Pleasure
     # A: Arousal
@@ -157,21 +144,12 @@ def PAD_to_JV_conversion(pad_val, t, robot_q, joint_limits, rd):  # dim: 1,7
     V = (1 + pad_val[1]) / 2
     G = (1 + pad_val[2]) / 2
 
-    w = np.pi * np.array([1, 2, 3, 1, 2, 1, 2])
-    wjs = [np.pi * np.array([1, 2, 3, 1, 2, 1, 2]), np.pi * np.array([1, 2, 3, 1, 2, 1, 2]) * 2]
-    aj = [3, 2]
-    bj = [6, 5]
-
+    # G
     w_gaze = 2 * np.pi / 5.0
     a_gaze = np.radians(60)
     gaze_ang = (1 - G) * a_gaze * np.sin(w_gaze * t)
     r_gaze = np.cos(gaze_ang / 2) + dql.j_ * np.sin(gaze_ang / 2)
 
-    """
-     phi = 
-    j=1
-    nJ[ajsin ωjt +bjcos(ωjt)]
-    """
     # P
     phi = J * np.sum([(aj[j_] * np.sin(wj * t) + bj[j_] * np.cos(wj * t)) for j_, wj in enumerate(wjs)])
 
@@ -201,7 +179,7 @@ def main(config):
     logger.info("Setting up UI")
     ui = ControlWindowLauncher(config["ui_num_slider"], [tuple(config['ui_slider_range'])] * config["ui_num_slider"],
                                self_centering=None,
-                               slider_labels=["slider P", "slider A", "slider D"])
+                               slider_labels=["Pleasure", "Arousal", "Dominance"])
 
     robot_q_plus = robot.get_upper_q_limit()
     robot_q_minus = robot.get_lower_q_limit()
@@ -280,8 +258,6 @@ def main(config):
             err_vec = get_objective_error_vec(robot_x, xd, config['control_objective'])
 
             pad_val = np.array(ui.get_values())  # get nullspace values from UI
-            # pad_val = np.array(ui.get_values())  # get nullspace values from UI
-            #
             # def PAD_to_JV_conversion(pad_val, t) -> np.ndarray: # dim: 1,7
             #     # P: Pleasure
             #     # A: Arousal
@@ -289,8 +265,13 @@ def main(config):
             #     # θmi t = 1−V θ0i + V[θV0i + hisin(ωt + φi)]
             #     pass
             #
-            u_null, rd_gaze = PAD_to_JV_conversion(pad_val, interation * config["control_tau"],
-                                                   robot_q, [robot_q_minus, robot_q_plus], rd_gaze)
+            u_null, rd_gaze = PAD_to_JV_conversion(
+                pad_val=pad_val,
+                robot_q=robot_q,
+                joint_limits=[robot_q_minus, robot_q_plus],
+                rd=rd_gaze,
+                t=interation * config["control_tau"],
+            )
 
             J_rot = get_objective_jacobian(Jx, robot_x, rd_gaze, ControlObjective.ROTATION)
             err_rot_vec = get_objective_error_vec(robot_x, rd_gaze, ControlObjective.ROTATION)
@@ -301,8 +282,7 @@ def main(config):
             try:
                 ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec + td_dot.vec4())
                        + (np.eye(dims) - pinv(J_obj) @ J_obj) @ (np.eye(dims) - pinv(J_rot) @ J_rot) @ (
-                                   config["null_space_gain"] * u_null)
-                       # +(np.eye(dims) - pinv(J_obj) @ J_obj) @ (config["null_space_gain"] *u_null)
+                               config["null_space_gain"] * u_null)
                        + (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot.T @ (config["null_rotation_gain"] * err_rot_vec)
                        )
                 robot_q = robot_q + ua_ * config["control_tau"]
@@ -315,7 +295,6 @@ def main(config):
             update_robot(robot_q)
 
             time.sleep(config['control_tau'])
-
 
     except KeyboardInterrupt:
         logger.warning("exit on KeyboardInterrupt")
