@@ -283,7 +283,7 @@ def main(config):
                 ua_ = (pinv(J_obj) @ (config["control_gain"] * err_vec + td_dot.vec4())
                        + (np.eye(dims) - pinv(J_obj) @ J_obj) @ (np.eye(dims) - pinv(J_rot) @ J_rot) @ (
                                config["null_space_gain"] * u_null)
-                       + (np.eye(dims) - pinv(J_obj) @ J_obj) @ J_rot.T @ (config["null_rotation_gain"] * err_rot_vec)
+                       + (np.eye(dims) - pinv(J_obj) @ J_obj) @ pinv(J_rot) @ (config["null_rotation_gain"] * err_rot_vec)
                        )
                 robot_q = robot_q + ua_ * config["control_tau"]
             except Exception as e:
